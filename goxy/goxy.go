@@ -18,19 +18,29 @@ type handler struct {
 }
 
 func (handler *handler) ServeHTTP(resp http.ResponseWriter, req *http.Request) {
-	fmt.Println("\na new request-----")
+	if req.Method=="CONNECT" {
+		fmt.Println("\n- - - - -a new request: https- - - - -")
+		fmt.Println("not support for https so far\n")
+		return
+	}
+	//req.Header.Del("Proxy-Connection")
+	//req.Header.Set("Connection","Keep-Alive")
+	fmt.Println("\n- - - - -a new request: http- - - - -")
 	fmt.Println("method:", req.Method)
 	fmt.Println("host:", req.Host)
-	fmt.Println("userAgent:", req.UserAgent())
-	fmt.Println("body:", req.GetBody)
 	fmt.Println("url:", req.URL)
 	fmt.Println("header:", req.Header)
+	fmt.Println("userAgent:", req.UserAgent())
+	fmt.Println("body:", req.GetBody)
 	var respRealServer *http.Response
 	var connRealServer net.Conn
 	var err error
 	host := req.Host
-	// respClient, _, err := resp.(http.Hijacker).Hijack()
-
+	respClient, _, err := resp.(http.Hijacker).Hijack()
+	if err!=nil {
+		fmt.Println("hijack to client resp err")
+	}
+	defer respClient.Close()
 	matched, _ := regexp.MatchString(":[0-9]+$", host)
 	if !matched {
 		host += ":80"
@@ -41,12 +51,15 @@ func (handler *handler) ServeHTTP(resp http.ResponseWriter, req *http.Request) {
 		fmt.Println("connRealServer conn err", err)
 		return
 	}
+	fmt.Println("connect to real server success")
 
 	err = req.Write(connRealServer)
 	if err != nil {
 		fmt.Println("connRealServer write err", err)
 		return
 	}
+
+	fmt.Println("write to real server success")
 
 	respRealServer, err = http.ReadResponse(bufio.NewReader(connRealServer), req)
 	if err != nil {
@@ -58,6 +71,11 @@ func (handler *handler) ServeHTTP(resp http.ResponseWriter, req *http.Request) {
 		fmt.Println("respRealServer is nil")
 		return
 	}
+	fmt.Println("real server response success")
+	fmt.Println("Status:",respRealServer.Status)
+	fmt.Println("heads:",respRealServer.Header)
+	fmt.Println("ContentLength:",respRealServer.ContentLength)
+	//fmt.Println("body",respRealServer.Body)
 
 	respDump, dumpErr := httputil.DumpResponse(respRealServer, true)
 	if dumpErr != nil {
@@ -65,11 +83,13 @@ func (handler *handler) ServeHTTP(resp http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	lenRes, er := resp.Write(respDump)
+	lenRes, er := respClient.Write(respDump)
 	if er != nil {
 		fmt.Println(er)
 		return
 	}
+
+	fmt.Println("write to client success")
 	fmt.Printf("\nresp %d char\n", lenRes)
 }
 
