@@ -3,6 +3,7 @@ package goxy
 import (
 	"bufio"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httputil"
@@ -18,9 +19,26 @@ type handler struct {
 }
 
 func (handler *handler) ServeHTTP(resp http.ResponseWriter, req *http.Request) {
-	if req.Method=="CONNECT" {
+	if req.Method == "CONNECT" {
 		fmt.Println("\n- - - - -a new request: https- - - - -")
-		fmt.Println("not support for https so far\n")
+		fmt.Println("host:", req.Host)
+		var connRealServer net.Conn
+		respClient, _, err := resp.(http.Hijacker).Hijack()
+		if err != nil {
+			fmt.Println("hijack to client resp err")
+		}
+		connRealServer, err = net.DialTimeout("tcp", req.Host, time.Second*30)
+		if err != nil {
+			fmt.Println("connRealServer conn err", err)
+			return
+		}
+		_, er := respClient.Write([]byte("HTTP/1.1 200 OK\r\n\r\n"))
+		if er != nil {
+			fmt.Println(er)
+			return
+		}
+		Transport(connRealServer, respClient)
+
 		return
 	}
 	//req.Header.Del("Proxy-Connection")
@@ -37,7 +55,7 @@ func (handler *handler) ServeHTTP(resp http.ResponseWriter, req *http.Request) {
 	var err error
 	host := req.Host
 	respClient, _, err := resp.(http.Hijacker).Hijack()
-	if err!=nil {
+	if err != nil {
 		fmt.Println("hijack to client resp err")
 	}
 	defer respClient.Close()
@@ -72,9 +90,9 @@ func (handler *handler) ServeHTTP(resp http.ResponseWriter, req *http.Request) {
 		return
 	}
 	fmt.Println("real server response success")
-	fmt.Println("Status:",respRealServer.Status)
-	fmt.Println("heads:",respRealServer.Header)
-	fmt.Println("ContentLength:",respRealServer.ContentLength)
+	fmt.Println("Status:", respRealServer.Status)
+	fmt.Println("heads:", respRealServer.Header)
+	fmt.Println("ContentLength:", respRealServer.ContentLength)
 	//fmt.Println("body",respRealServer.Body)
 
 	respDump, dumpErr := httputil.DumpResponse(respRealServer, true)
@@ -113,4 +131,24 @@ func StartProxy() error {
 		return err
 	}
 	return nil
+}
+
+//两个io口的连接
+func Transport(conn1, conn2 net.Conn) (err error) {
+	rChan := make(chan error, 1)
+	wChan := make(chan error, 1)
+
+	go MyCopy(conn1, conn2, wChan)
+	go MyCopy(conn2, conn1, rChan)
+
+	select {
+	case err = <-wChan:
+	case err = <-rChan:
+	}
+
+	return
+}
+func MyCopy(src io.Reader, dst io.Writer, ch chan<- error) {
+	_, err := io.Copy(dst, src)
+	ch <- err
 }
