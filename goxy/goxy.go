@@ -12,49 +12,60 @@ import (
 )
 
 type config struct {
-	Port string
+	Port string //监听端口号
+	Dump bool   //是否解析请求和返回
 }
 
 type handler struct {
+	Config config
+}
+
+func StartProxy() error {
+
+	handler := &handler{
+		Config: config{
+			Port: "8080",
+			Dump: true,
+		},
+	}
+
+	server := http.Server{
+		Addr:         ":" + handler.Config.Port,
+		Handler:      handler,
+		ReadTimeout:  1 * time.Hour,
+		WriteTimeout: 1 * time.Hour,
+	}
+
+	fmt.Print("start proxy at port:", handler.Config.Port)
+	err := server.ListenAndServe()
+	if err != nil {
+		return err
+	}
+	return nil
 }
 
 func (handler *handler) ServeHTTP(resp http.ResponseWriter, req *http.Request) {
-	if req.Method == "CONNECT" {
-		fmt.Println("\n- - - - -a new request: https- - - - -")
-		fmt.Println("host:", req.Host)
-		var connRealServer net.Conn
-		respClient, _, err := resp.(http.Hijacker).Hijack()
-		if err != nil {
-			fmt.Println("hijack to client resp err")
-		}
-		connRealServer, err = net.DialTimeout("tcp", req.Host, time.Second*30)
-		if err != nil {
-			fmt.Println("connRealServer conn err", err)
-			return
-		}
-		_, er := respClient.Write([]byte("HTTP/1.1 200 OK\r\n\r\n"))
-		if er != nil {
-			fmt.Println(er)
-			return
-		}
-		Transport(connRealServer, respClient)
 
+	if req.Method == "CONNECT" {
+		HttpsProxy(&resp, req)
 		return
 	}
-	//req.Header.Del("Proxy-Connection")
-	//req.Header.Set("Connection","Keep-Alive")
-	fmt.Println("\n- - - - -a new request: http- - - - -")
-	fmt.Println("method:", req.Method)
-	fmt.Println("host:", req.Host)
-	fmt.Println("url:", req.URL)
-	fmt.Println("header:", req.Header)
-	fmt.Println("userAgent:", req.UserAgent())
-	fmt.Println("body:", req.GetBody)
+	HttpProxy(&resp, req, handler.Config)
+}
+
+func HttpProxy(respWriter *http.ResponseWriter, req *http.Request, config config) {
 	var respRealServer *http.Response
 	var connRealServer net.Conn
 	var err error
+
+	if config.Dump {
+		DumpReq(req)
+	}
+
+	req.Header.Del("Proxy-Connection")
+	req.Header.Set("Connection", "Keep-Alive")
 	host := req.Host
-	respClient, _, err := resp.(http.Hijacker).Hijack()
+	respClient, _, err := (*respWriter).(http.Hijacker).Hijack()
 	if err != nil {
 		fmt.Println("hijack to client resp err")
 	}
@@ -86,14 +97,13 @@ func (handler *handler) ServeHTTP(resp http.ResponseWriter, req *http.Request) {
 	}
 
 	if respRealServer == nil {
-		fmt.Println("respRealServer is nil")
+		fmt.Println("RealServerl have no response")
 		return
 	}
-	fmt.Println("real server response success")
-	fmt.Println("Status:", respRealServer.Status)
-	fmt.Println("heads:", respRealServer.Header)
-	fmt.Println("ContentLength:", respRealServer.ContentLength)
-	//fmt.Println("body",respRealServer.Body)
+
+	if config.Dump {
+		DumpResp(respRealServer)
+	}
 
 	respDump, dumpErr := httputil.DumpResponse(respRealServer, true)
 	if dumpErr != nil {
@@ -106,31 +116,27 @@ func (handler *handler) ServeHTTP(resp http.ResponseWriter, req *http.Request) {
 		fmt.Println(er)
 		return
 	}
-
 	fmt.Println("write to client success")
 	fmt.Printf("\nresp %d char\n", lenRes)
 }
 
-func StartProxy() error {
-	config := config{
-		Port: "8080",
-	}
-
-	handler := &handler{}
-
-	server := http.Server{
-		Addr:         ":" + config.Port,
-		Handler:      handler,
-		ReadTimeout:  1 * time.Hour,
-		WriteTimeout: 1 * time.Hour,
-	}
-
-	fmt.Print("start proxy at port:", config.Port)
-	err := server.ListenAndServe()
+func HttpsProxy(resp *http.ResponseWriter, req *http.Request) {
+	var connRealServer net.Conn
+	respClient, _, err := (*resp).(http.Hijacker).Hijack()
 	if err != nil {
-		return err
+		fmt.Println("hijack to client resp err")
 	}
-	return nil
+	connRealServer, err = net.DialTimeout("tcp", req.Host, time.Second*30)
+	if err != nil {
+		fmt.Println("connRealServer conn err", err)
+		return
+	}
+	_, er := respClient.Write([]byte("HTTP/1.1 200 OK\r\n\r\n"))
+	if er != nil {
+		fmt.Println(er)
+		return
+	}
+	Transport(connRealServer, respClient)
 }
 
 //两个io口的连接
@@ -140,12 +146,10 @@ func Transport(conn1, conn2 net.Conn) (err error) {
 
 	go MyCopy(conn1, conn2, wChan)
 	go MyCopy(conn2, conn1, rChan)
-
 	select {
 	case err = <-wChan:
 	case err = <-rChan:
 	}
-
 	return
 }
 func MyCopy(src io.Reader, dst io.Writer, ch chan<- error) {
